@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>📞 2對2 視訊聊天</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#007aff">
+<style>
+html, body { margin:0; padding:0; height:100%; font-family:Arial; }
+#container { display:flex; flex-direction:column; height:100%; }
+#tip { background:#fffae6; padding:10px; border:1px solid #ccc; margin:0; }
+#loginDiv, #roomDiv { padding:10px; background:#f0f0f0; }
+#mainArea { display:flex; flex-direction:column; flex:1; }
+#videoContainer { flex:1; }
+#chatRoom { width:100%; height:100%; border:none; }
+#chatArea { height:30%; overflow-y:auto; border-top:1px solid #ccc; padding:5px; background:#f9f9f9; }
+#roomList div { margin:5px 0; }
+#stickerPanel img { width:40px; margin:5px; cursor:pointer; }
+#fullscreenBtn { margin:5px; padding:5px 10px; cursor:pointer; }
+@media (max-width:768px){ #chatArea{ height:35%; } }
+</style>
+</head>
+<body>
+<h1>📞 2對2 視訊聊天</h1>
+<div id="tip">步驟：輸入帳號密碼 + 中文名字 → 建立或加入房間 → 允許加入 → 開始聊天</div>
+
+<div id="loginDiv">
+  <label>帳號：</label><input type="text" id="account"><br><br>
+  <label>密碼：</label><input type="password" id="password"><br><br>
+  <label>中文名字：</label><input type="text" id="name"><br><br>
+  <button onclick="login()">登入</button>
+</div>
+
+<div id="roomDiv" style="display:none;">
+  <h2>房間</h2>
+  <input type="text" id="roomName" placeholder="輸入房間名稱">
+  <button onclick="createRoom()">創建房間</button>
+  <button onclick="joinRoom()">加入房間</button>
+  <button onclick="callFriend()">打給朋友</button>
+  <h3>我加入過的房間：</h3>
+  <div id="roomList"></div>
+</div>
+
+<div id="inviteDiv" style="margin-top:5px;"></div>
+
+<div id="mainArea">
+  <button id="fullscreenBtn" onclick="toggleFullscreen()">全螢幕</button>
+  <div id="videoContainer">
+    <iframe id="chatRoom"></iframe>
+  </div>
+  <div id="chatArea" style="display:none;">
+    <h3>聊天室</h3>
+    <div id="messages"></div>
+    <input type="text" id="chatInput" placeholder="輸入訊息">
+    <button onclick="sendMessage()">送出</button>
+    <button onclick="toggleStickers()">貼圖</button>
+    <div id="stickerPanel" style="display:none;">
+      <img src="sticker1.png" onclick="sendSticker('sticker1.png')">
+      <img src="sticker2.png" onclick="sendSticker('sticker2.png')">
+      <img src="sticker3.png" onclick="sendSticker('sticker3.png')">
+    </div>
+  </div>
+</div>
+
+<script>
+// Service Worker
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('sw.js')
+    .then(()=>console.log('Service Worker 註冊成功'))
+    .catch(e=>console.log('Service Worker 註冊失敗', e));
+}
+
+const USER_ACCOUNTS = { "hhhzv522":"Ai20150325." };
+let invitedRoom = null;
+let isFullscreen = false;
+
+window.onload = function(){
+  const params = new URLSearchParams(window.location.search);
+  if(params.has("room")){
+    invitedRoom = params.get("room");
+    document.getElementById('roomName').value = invitedRoom;
+    alert("已偵測到邀請房間：" + invitedRoom + "，登入後將自動進入房間");
+  }
+}
+
+function login(){
+  const acc = document.getElementById('account').value.trim();
+  const pw = document.getElementById('password').value.trim();
+  const name = document.getElementById('name').value.trim();
+  if(!acc||!pw||!name){ alert('請完整輸入'); return; }
+  if(USER_ACCOUNTS[acc]!==pw){ alert('帳號或密碼錯誤'); return; }
+
+  localStorage.setItem('currentUser', name);
+  document.getElementById('loginDiv').style.display='none';
+  document.getElementById('roomDiv').style.display='block';
+  loadRoomList();
+  if(invitedRoom){ saveRoom(invitedRoom); openRoom(invitedRoom); }
+}
+
+function saveRoom(room){
+  let rooms = JSON.parse(localStorage.getItem('rooms')||'[]');
+  if(!rooms.includes(room)) rooms.push(room);
+  localStorage.setItem('rooms', JSON.stringify(rooms));
+}
+
+function loadRoomList(){
+  const rooms = JSON.parse(localStorage.getItem('rooms')||'[]');
+  const listDiv = document.getElementById('roomList');
+  listDiv.innerHTML='';
+  rooms.forEach((r,index)=>{
+    const div = document.createElement('div');
+    const btn = document.createElement('button'); btn.textContent=r; btn.onclick=()=>joinRoom(r);
+    const del = document.createElement('button'); del.textContent="❌"; del.style.marginLeft="10px";
+    del.onclick=()=>{ rooms.splice(index,1); localStorage.setItem('rooms', JSON.stringify(rooms)); loadRoomList(); };
+    div.appendChild(btn); div.appendChild(del); listDiv.appendChild(div);
+  });
+}
+
+function createRoom(){
+  const room = document.getElementById('roomName').value.trim();
+  if(!room){ alert('請輸入房間名稱'); return; }
+  saveRoom(room); openRoom(room);
+}
+
+function joinRoom(room){
+  const r = room || document.getElementById('roomName').value.trim();
+  if(!r){ alert('請輸入房間名稱'); return; }
+  saveRoom(r); openRoom(r);
+}
+
+function callFriend(){
+  const timestamp = new Date().getTime();
+  const room = "call-" + timestamp; saveRoom(room); openRoom(room);
+  const inviteLink = window.location.origin + window.location.pathname + "?room=" + encodeURIComponent(room);
+  navigator.clipboard.writeText(inviteLink).then(()=>alert("臨時房間已建立！邀請連結已複製到剪貼簿：\n"+inviteLink));
+}
+
+function openRoom(room){
+  const name = localStorage.getItem('currentUser');
+  const iframe = document.getElementById('chatRoom');
+  iframe.style.display='block';
+  document.getElementById('chatArea').style.display='block';
+  const roomURL = `https://meet.jit.si/${encodeURIComponent(room)}#userInfo.displayName=${encodeURIComponent(name)}`;
+  iframe.src = roomURL;
+  alert("📞 有人打來了！房間：" + room);
+  const inviteLink = window.location.origin + window.location.pathname + "?room=" + encodeURIComponent(room);
+  document.getElementById("inviteDiv").innerHTML = `🔗 邀請朋友連結：<a href="${inviteLink}">${inviteLink}</a>`;
+}
+
+function sendMessage(){
+  const input = document.getElementById('chatInput');
+  if(input.value.trim()==='') return;
+  const msg = document.createElement('div'); msg.textContent = localStorage.getItem('currentUser') + "：" + input.value;
+  document.getElementById('messages').appendChild(msg); input.value='';
+}
+
+function toggleStickers(){
+  const panel = document.getElementById('stickerPanel'); panel.style.display = panel.style.display==='none'?'block':'none';
+}
+
+function sendSticker(url){
+  const msg = document.createElement('div'); const img = document.createElement('img');
+  img.src=url; img.style.width='60px';
+  msg.textContent=localStorage.getItem('currentUser')+"："; msg.appendChild(img);
+  document.getElementById('messages').appendChild(msg); toggleStickers();
+}
+
+function toggleFullscreen(){
+  const chatArea = document.getElementById('chatArea');
+  const videoContainer = document.getElementById('videoContainer');
+  const btn = document.getElementById('fullscreenBtn');
+  if(!isFullscreen){
+    chatArea.style.display='none';
+    videoContainer.style.flex='1';
+    btn.textContent='退出全螢幕';
+    isFullscreen=true;
+  } else {
+    chatArea.style.display='block';
+    videoContainer.style.flex='1';
+    btn.textContent='全螢幕';
+    isFullscreen=false;
+  }
+}
+</script>
+</body>
+</html>
